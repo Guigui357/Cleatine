@@ -14,7 +14,7 @@ env:
 
 jobs:
   build:
-    runs-on: macos-14          # arm64 GitHub-hosted; drop the -arm64-us-xl suffix
+    runs-on: macos-27
     timeout-minutes: 40
     steps:
       - name: select xcode
@@ -27,7 +27,6 @@ jobs:
           xcodebuild -version
           uname -m
 
-# language: YAML, file: .github/workflows/build.yml (write step, indented + dedented)
       - name: write project tree
         run: |
           set -euo pipefail
