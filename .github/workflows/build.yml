@@ -30,9 +30,9 @@ jobs:
       - name: write project tree
         run: |
           set -euo pipefail
-          mkdir -p kfd_a15 bootstrap
+          mkdir -p $GITHUB_WORKSPACE/kfd_a15 $GITHUB_WORKSPACE/bootstrap
 
-          cat > project.yml <<'YAML'
+          cat > $GITHUB_WORKSPACE/project.yml <<'YAML'
           name: kfd_a15
           options:
             bundleIdPrefix: com.kfd
@@ -70,7 +70,7 @@ jobs:
                   SWIFT_OBJC_BRIDGING_HEADER: kfd_a15/Bridge.h
           YAML
 
-          cat > kfd_a15/Bridge.h <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/Bridge.h <<'EOF'
           #ifndef BRIDGE_H
           #define BRIDGE_H
           #include <stdint.h>
@@ -80,7 +80,7 @@ jobs:
           #endif
           EOF
 
-          cat > kfd_a15/Bridge.m <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/Bridge.m <<'EOF'
           #import "Bridge.h"
           #include <unistd.h>
           int kfd_a15_run(void) { return kfd_a15(); }
@@ -88,7 +88,7 @@ jobs:
           int install_bootstrap(void) { return bootstrap_main(); }
           EOF
 
-          cat > kfd_a15/App.swift <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/App.swift <<'EOF'
           import SwiftUI
 
           @main
@@ -152,7 +152,7 @@ jobs:
           }
           EOF
 
-          cat > kfd_a15/Bootstrap.swift <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/Bootstrap.swift <<'EOF'
           import Foundation
 
           @_cdecl("bootstrap_main")
@@ -185,7 +185,7 @@ jobs:
           }
           EOF
 
-          cat > kfd_a15/Info.plist <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/Info.plist <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -204,7 +204,7 @@ jobs:
           </plist>
           EOF
 
-          cat > kfd_a15/kfd_a15.entitlements <<'EOF'
+          cat > $GITHUB_WORKSPACE/kfd_a15/kfd_a15.entitlements <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -222,26 +222,60 @@ jobs:
 
           # strip the block-scalar indent so files land at column zero
           for f in project.yml \
-                   kfd_a15/Bridge.h kfd_a15/Bridge.m kfd_a15/App.swift \
-                   kfd_a15/Bootstrap.swift kfd_a15/kfd_a15.c \
-                   kfd_a15/Info.plist kfd_a15/kfd_a15.entitlements; do
+                   $GITHUB_WORKSPACE/kfd_a15/Bridge.h $GITHUB_WORKSPACE/kfd_a15/Bridge.m $GITHUB_WORKSPACE/kfd_a15/App.swift \
+                   $GITHUB_WORKSPACE/kfd_a15/Bootstrap.swift $GITHUB_WORKSPACE/kfd_a15/kfd_a15.c \
+                   $GITHUB_WORKSPACE/kfd_a15/Info.plist $GITHUB_WORKSPACE/kfd_a15/kfd_a15.entitlements; do
             sed -i '' 's/^          //' "$f"
           done
 
           # verify
-          head -n 1 project.yml
-          head -n 1 kfd_a15/Bridge.h
+          head -n 1 $GITHUB_WORKSPACE/project.yml
+          head -n 1 $GITHUB_WORKSPACE/kfd_a15/Bridge.h
           echo "[+] project tree written"
 
       - name: fetch bootstrap payloads
         run: |
           set -euo pipefail
           cd bootstrap
-          curl -fL -o procursus-rootless.tar \
-            "https://github.com/ProcursusTeam/Procursus/releases/latest/download/bootstrap-rootless.tar"
+
+          # rootless suites live under dists/<suite>/ — NOT the server root.
+          # 1800 = iOS 15 rootless, 1900 = iOS 16+ rootless.
+          PROCURSUS_SUITE="1900"
+          PROCURSUS_BASE="https://apt.procurs.us/dists/${PROCURSUS_SUITE}"
+
+          # 1. probe the suite index first — fail fast if the suite or the
+          #    asset name is not what this step expects.
+          echo "== suite index =="
+          curl -fsSL "${PROCURSUS_BASE}/" | tee /tmp/suite.html | head -n 60
+          echo
+
+          # 2. discover the real bootstrap asset name from the listing.
+          #    the filename has changed across releases; do not hardcode it.
+          BOOTSTRAP_ASSET=$(grep -oE 'bootstrap-[^"<> ]+\.tar\.(zst|xz|gz)' /tmp/suite.html | head -n1 || true)
+          if [ -z "${BOOTSTRAP_ASSET}" ]; then
+            echo "[-] no bootstrap asset listed under ${PROCURSUS_BASE}/"
+            echo "[-] open that URL and read the listing; paste the filename"
+            exit 1
+          fi
+          echo "[+] bootstrap asset: ${BOOTSTRAP_ASSET}"
+
+          # 3. fetch it.
+          curl -fL -o "${BOOTSTRAP_ASSET}" "${PROCURSUS_BASE}/${BOOTSTRAP_ASSET}"
+
+          # 4. fetch Sileo from the pool.
           curl -fL -o Sileo.deb \
-            "https://github.com/Sileo/Sileo/releases/latest/download/org.coolstar.sileo_arm64.deb"
+            "https://apt.procurs.us/pool/main/org.coolstar.sileo_arm64.deb"
+
+          # 5. normalise to the name the app expects.
+          case "${BOOTSTRAP_ASSET}" in
+            *.tar.zst) brew install zstd; zstd -d "${BOOTSTRAP_ASSET}" -o procursus-rootless.tar ;;
+            *.tar.xz)  xz -d -c "${BOOTSTRAP_ASSET}" > procursus-rootless.tar ;;
+            *.tar.gz)  gzip -d -c "${BOOTSTRAP_ASSET}" > procursus-rootless.tar ;;
+            *.tar)     cp "${BOOTSTRAP_ASSET}" procursus-rootless.tar ;;
+          esac
+
           ls -la
+          tar -tf procursus-rootless.tar | head -n 10
 
       - name: generate project
         run: |
@@ -252,6 +286,7 @@ jobs:
       - name: build unsigned .app
         run: |
           set -euo pipefail
+          cd $GITHUB_WORKSPACE
           xcodebuild \
             -project ${APP_NAME}.xcodeproj \
             -scheme ${SCHEME} \
@@ -268,6 +303,7 @@ jobs:
         id: pkg
         run: |
           set -euo pipefail
+          cd $GITHUB_WORKSPACE 
           APP_PATH=$(find build/Build/Products/${CONFIG}-iphoneos -maxdepth 1 -name "${APP_NAME}.app" | head -n1)
           test -n "$APP_PATH"
           mkdir -p "$APP_PATH/bootstrap"
