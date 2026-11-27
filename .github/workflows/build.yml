@@ -227,6 +227,7 @@ jobs:
       - name: generate project
         run: |
           set -euo pipefail
+          cd $GITHUB_WORKSPACE
           brew install xcodegen ldid
           xcodegen generate --spec project.yml
 
