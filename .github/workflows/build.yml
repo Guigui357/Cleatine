@@ -44,24 +44,6 @@ jobs:
           test -s project.yml          || { echo "[-] project.yml missing"; exit 1; }
           test -s kfd_a15/kfd_a15.c    || { echo "[-] kfd_a15.c missing"; exit 1; }
 
-          cat > kfd_a15/Bridge.h <<'EOF'
-          #ifndef BRIDGE_H
-          #define BRIDGE_H
-          #include <stdint.h>
-          int      kfd_a15(void);
-          uint32_t kfd_a15_read_uid(void);
-          int      bootstrap_main(void);
-          #endif
-          EOF
-
-          cat > kfd_a15/Bridge.m <<'EOF'
-          #import "Bridge.h"
-          #include <unistd.h>
-          int kfd_a15_run(void) { return kfd_a15(); }
-          uint32_t kfd_a15_read_uid(void) { return (uint32_t)getuid(); }
-          int install_bootstrap(void) { return bootstrap_main(); }
-          EOF
-
           cat > kfd_a15/App.swift <<'EOF'
           import SwiftUI
 
