@@ -1,4 +1,4 @@
-# language: YAML, file: .github/workflows/build-jailbreak.yml, target: GitHub Actions
+# language: YAML, file: .github/workflows/build.yml
 name: build-jailbreak
 
 on:
@@ -8,7 +8,6 @@ on:
 
 env:
   APP_NAME: kfd_a15
-  BUNDLE_ID: com.kfd.a15
   SCHEME: kfd_a15
   CONFIG: Release
 
@@ -16,6 +15,7 @@ jobs:
   build:
     runs-on: macos-26
     timeout-minutes: 40
+
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -23,18 +23,29 @@ jobs:
       - name: select xcode
         run: |
           set -euo pipefail
-          # Xcode 26.0.1 on macos-26 lacks the iOS platform component.
-          # 26.2 ships the iOS 26.2 SDK and simulator set on the same image.
           sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
           xcodebuild -version
           xcodebuild -showsdks | grep -i iphoneos || true
 
-      - name: write project tree
+      - name: verify repo files
         run: |
           set -euo pipefail
-          mkdir -p $GITHUB_WORKSPACE/kfd_a15 $GITHUB_WORKSPACE/bootstrap
+          for f in project.yml kfd_a15/kfd_a15.c; do
+            test -s "$f" || { echo "[-] repo missing $f"; exit 1; }
+            echo "[+] $f $(wc -c < "$f") bytes"
+          done
+          python3 -c "import yaml;yaml.safe_load(open('project.yml'));print('project.yml parses')"
 
-          cat > $GITHUB_WORKSPACE/kfd_a15/Bridge.h <<'EOF'
+      - name: write missing files
+        run: |
+          set -euo pipefail
+          mkdir -p kfd_a15 bootstrap
+
+          # never overwrite the repo's project.yml or kfd_a15.c
+          test -s project.yml          || { echo "[-] project.yml missing"; exit 1; }
+          test -s kfd_a15/kfd_a15.c    || { echo "[-] kfd_a15.c missing"; exit 1; }
+
+          cat > kfd_a15/Bridge.h <<'EOF'
           #ifndef BRIDGE_H
           #define BRIDGE_H
           #include <stdint.h>
@@ -44,7 +55,7 @@ jobs:
           #endif
           EOF
 
-          cat > $GITHUB_WORKSPACE/kfd_a15/Bridge.m <<'EOF'
+          cat > kfd_a15/Bridge.m <<'EOF'
           #import "Bridge.h"
           #include <unistd.h>
           int kfd_a15_run(void) { return kfd_a15(); }
@@ -52,7 +63,7 @@ jobs:
           int install_bootstrap(void) { return bootstrap_main(); }
           EOF
 
-          cat > $GITHUB_WORKSPACE/kfd_a15/App.swift <<'EOF'
+          cat > kfd_a15/App.swift <<'EOF'
           import SwiftUI
 
           @main
@@ -116,7 +127,7 @@ jobs:
           }
           EOF
 
-          cat > $GITHUB_WORKSPACE/kfd_a15/Bootstrap.swift <<'EOF'
+          cat > kfd_a15/Bootstrap.swift <<'EOF'
           import Foundation
 
           @_cdecl("bootstrap_main")
@@ -142,14 +153,45 @@ jobs:
           }
 
           private func spawn(_ path: String, _ args: [String]) -> Int32 {
-              let p = Process()
-              p.executableURL = URL(fileURLWithPath: path)
-              p.arguments = args
-              do { try p.run(); p.waitUntilExit(); return p.terminationStatus } catch { return -1 }
+              let cArgs = args.map { strdup($0) } + [nil]
+              defer { cArgs.forEach { free($0) } }
+              var pid: pid_t = 0
+              var actions: posix_spawnattr_t?
+              var fileActions: posix_spawn_file_actions_t?
+              posix_spawnattr_init(&actions)
+              posix_spawn_file_actions_init(&fileActions)
+              let rc = path.withCString { cPath in
+                  posix_spawn(&pid, cPath, &fileActions, &actions, cArgs, environ)
+              }
+              posix_spawnattr_destroy(&actions)
+              posix_spawn_file_actions_destroy(&fileActions)
+              if rc != 0 { return -1 }
+              var status: Int32 = 0
+              waitpid(pid, &status, 0)
+              return status
           }
           EOF
 
-          cat > $GITHUB_WORKSPACE/kfd_a15/kfd_a15.entitlements <<'EOF'
+          cat > kfd_a15/Info.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleIdentifier</key><string>com.kfd.a15</string>
+              <key>CFBundleName</key><string>kfd</string>
+              <key>CFBundleExecutable</key><string>kfd_a15</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>1.0</string>
+              <key>CFBundleVersion</key><string>1</string>
+              <key>MinimumOSVersion</key><string>16.0</string>
+              <key>UILaunchScreen</key><dict/>
+              <key>UISupportedInterfaceOrientations</key>
+              <array><string>UIInterfaceOrientationPortrait</string></array>
+          </dict>
+          </plist>
+          EOF
+
+          cat > kfd_a15/kfd_a15.entitlements <<'EOF'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
           <plist version="1.0">
@@ -165,59 +207,54 @@ jobs:
           </plist>
           EOF
 
-          # strip the block-scalar indent so files land at column zero
-          for f in $GITHUB_WORKSPACE/kfd_a15/Bridge.h $GITHUB_WORKSPACE/kfd_a15/Bridge.m $GITHUB_WORKSPACE/kfd_a15/App.swift \
-                   $GITHUB_WORKSPACE/kfd_a15/Bootstrap.swift $GITHUB_WORKSPACE/kfd_a15/kfd_a15.c \
-                   $GITHUB_WORKSPACE/kfd_a15/Info.plist $GITHUB_WORKSPACE/kfd_a15/kfd_a15.entitlements; do
+          # strip the block-scalar indent from the generated files
+          for f in kfd_a15/Bridge.h kfd_a15/Bridge.m kfd_a15/App.swift \
+                   kfd_a15/Bootstrap.swift kfd_a15/Info.plist \
+                   kfd_a15/kfd_a15.entitlements; do
             sed -i '' 's/^          //' "$f"
           done
 
-          # verify
-          head -n 1 $GITHUB_WORKSPACE/project.yml
-          head -n 1 $GITHUB_WORKSPACE/kfd_a15/Bridge.h
-          echo "[+] project tree written"
+          # prove nothing was written indented and the repo files survived
+          head -n 1 kfd_a15/Bridge.h
+          head -n 1 kfd_a15/App.swift
+          head -n 1 project.yml
+          head -n 1 kfd_a15/kfd_a15.c
 
       - name: fetch bootstrap payloads
         run: |
           set -euo pipefail
           cd bootstrap
-
           BASE="https://apt.procurs.us/dists/1900"
           ARCH="iphoneos-arm64"
           PKG_INDEX="${BASE}/main/binary-${ARCH}/Packages.zst"
-
-          brew install zstd
+          brew install zstd dpkg
           curl -fL -o /tmp/Packages.zst "${PKG_INDEX}"
           zstd -d -f /tmp/Packages.zst -o /tmp/Packages
           echo "[+] index: $(wc -l < /tmp/Packages) lines"
-
-          # the bootstrap is the 'base' package; bootstrap-cmds carries the tools
           for PKG in base bootstrap-cmds; do
             FILE=$(awk -v p="$PKG" '$0=="Package: "p{f=1} f&&/^Filename:/{print $2; exit}' /tmp/Packages)
             if [ -z "${FILE}" ]; then echo "[-] no Filename for ${PKG}"; exit 1; fi
             echo "[+] ${PKG}: ${FILE}"
             curl -fL -o "${PKG}.deb" "https://apt.procurs.us/${FILE}"
-            dpkg-deb -x "${PKG}.deb" extracted/ 2>/dev/null || {
-              brew install dpkg; dpkg-deb -x "${PKG}.deb" extracted/
-            }
+            dpkg-deb -x "${PKG}.deb" extracted/
           done
-
-          # tar the extracted rootless filesystem as the bootstrap payload
+          SILEO_FILE=$(awk '$0=="Package: org.coolstar.sileo"{f=1} f&&/^Filename:/{print $2; exit}' /tmp/Packages)
+          if [ -n "${SILEO_FILE}" ]; then
+            curl -fL -o Sileo.deb "https://apt.procurs.us/${SILEO_FILE}"
+          fi
           tar -cf procursus-rootless.tar -C extracted .
+          test -s procursus-rootless.tar
           ls -la
-          tar -tf procursus-rootless.tar | head -n 10
-          
+
       - name: generate project
         run: |
           set -euo pipefail
-          cd $GITHUB_WORKSPACE
           brew install xcodegen ldid
           xcodegen generate --spec project.yml
 
       - name: build unsigned .app
         run: |
           set -euo pipefail
-          cd $GITHUB_WORKSPACE
           xcodebuild \
             -project ${APP_NAME}.xcodeproj \
             -scheme ${SCHEME} \
@@ -231,10 +268,8 @@ jobs:
             build
 
       - name: package .ipa
-        id: pkg
         run: |
           set -euo pipefail
-          cd $GITHUB_WORKSPACE 
           APP_PATH=$(find build/Build/Products/${CONFIG}-iphoneos -maxdepth 1 -name "${APP_NAME}.app" | head -n1)
           test -n "$APP_PATH"
           mkdir -p "$APP_PATH/bootstrap"
