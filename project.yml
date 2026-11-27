@@ -1,4 +1,3 @@
-# language: YAML, file: project.yml
 name: kfd_a15
 options:
   bundleIdPrefix: com.kfd
