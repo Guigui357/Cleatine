@@ -32,6 +32,9 @@ targets:
         buildPhase: headers
       - path: kfd_a15/Bridge.m
         buildPhase: sources
+    dependencies:
+      - sdk: IOKit.framework
+      - sdk: CoreFoundation.framework
     settings:
       base:
         INFOPLIST_FILE: kfd_a15/Info.plist
