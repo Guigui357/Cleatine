@@ -2,12 +2,16 @@
 // offset-free chain: no #define offset table. task/proc/ucred fields are
 // found at runtime by structural scan. the only per-build values left are
 // the IOKit trigger selector and the PAC signing gadget.
+#define MACH_VM_PROTOS 1
+#define MACH_VM_DEBUG 1
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <mach/vm_map.h>
 #include <IOKit/IOKitLib.h>
 #include <CoreFoundation/CoreFoundation.h>
