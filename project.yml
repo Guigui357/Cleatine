@@ -1,0 +1,36 @@
+# language: YAML, file: project.yml
+name: kfd_a15
+options:
+  bundleIdPrefix: com.kfd
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    ARCHS: arm64e
+    VALID_ARCHS: arm64e
+    ONLY_ACTIVE_ARCH: NO
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    CODE_SIGN_IDENTITY: ""
+    CODE_SIGNING_REQUIRED: NO
+    CODE_SIGNING_ALLOWED: NO
+    SWIFT_VERSION: "5.9"
+    HEADER_SEARCH_PATHS:
+      - $(SRCROOT)/kfd_a15
+targets:
+  kfd_a15:
+    type: application
+    platform: iOS
+    sources:
+      - path: kfd_a15
+        excludes:
+          - Info.plist
+          - kfd_a15.entitlements
+    settings:
+      base:
+        INFOPLIST_FILE: kfd_a15/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.kfd.a15
+        PRODUCT_NAME: kfd_a15
+        CODE_SIGN_ENTITLEMENTS: kfd_a15/kfd_a15.entitlements
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_OBJC_BRIDGING_HEADER: kfd_a15/Bridge.h
