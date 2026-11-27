@@ -232,7 +232,6 @@ jobs:
           head -n 1 $GITHUB_WORKSPACE/kfd_a15/Bridge.h
           echo "[+] project tree written"
 
-# language: YAML, file: .github/workflows/build.yml (fetch step — package index)
       - name: fetch bootstrap payloads
         run: |
           set -euo pipefail
@@ -242,49 +241,27 @@ jobs:
           ARCH="iphoneos-arm64"
           PKG_INDEX="${BASE}/main/binary-${ARCH}/Packages.zst"
 
-          # 1. pull and decompress the package index.
           brew install zstd
           curl -fL -o /tmp/Packages.zst "${PKG_INDEX}"
           zstd -d -f /tmp/Packages.zst -o /tmp/Packages
-          echo "[+] package index: $(wc -l < /tmp/Packages) lines"
+          echo "[+] index: $(wc -l < /tmp/Packages) lines"
 
-          # 2. find the bootstrap package stanza and its Filename.
-          #    the package name is procursus-bootstrap (confirm in the index).
-          BOOTSTRAP_FILE=$(
-            awk '/^Package: procursus-bootstrap$/{f=1} f&&/^Filename:/{print $2; exit}' /tmp/Packages
-          )
-          if [ -z "${BOOTSTRAP_FILE}" ]; then
-            echo "[-] no procursus-bootstrap in the index"
-            echo "[-] every package name in the index:"
-            grep '^Package:' /tmp/Packages | sort -u | head -n 80
-            exit 1
-          fi
-          echo "[+] bootstrap Filename: ${BOOTSTRAP_FILE}"
+          # the bootstrap is the 'base' package; bootstrap-cmds carries the tools
+          for PKG in base bootstrap-cmds; do
+            FILE=$(awk -v p="$PKG" '$0=="Package: "p{f=1} f&&/^Filename:/{print $2; exit}' /tmp/Packages)
+            if [ -z "${FILE}" ]; then echo "[-] no Filename for ${PKG}"; exit 1; fi
+            echo "[+] ${PKG}: ${FILE}"
+            curl -fL -o "${PKG}.deb" "https://apt.procurs.us/${FILE}"
+            dpkg-deb -x "${PKG}.deb" extracted/ 2>/dev/null || {
+              brew install dpkg; dpkg-deb -x "${PKG}.deb" extracted/
+            }
+          done
 
-          # 3. fetch it from the pool root (Filename is repo-relative).
-          curl -fL -o procursus-rootless.tar.zst \
-            "https://apt.procurs.us/${BOOTSTRAP_FILE}"
-
-          # 4. Sileo — also from the index, same mechanism.
-          SILEO_FILE=$(
-            awk '/^Package: org.coolstar.sileo$/{f=1} f&&/^Filename:/{print $2; exit}' /tmp/Packages
-          )
-          if [ -n "${SILEO_FILE}" ]; then
-            curl -fL -o Sileo.deb "https://apt.procurs.us/${SILEO_FILE}"
-          fi
-
-          # 5. normalise the bootstrap to the name the app expects.
-          case "${BOOTSTRAP_FILE}" in
-            *.zst) zstd -d -f procursus-rootless.tar.zst -o procursus-rootless.tar ;;
-            *.xz)  xz -d -c procursus-rootless.tar.zst > procursus-rootless.tar ;;
-            *.gz)  gzip -d -c procursus-rootless.tar.zst > procursus-rootless.tar ;;
-            *)     mv procursus-rootless.tar.zst procursus-rootless.tar ;;
-          esac
-
+          # tar the extracted rootless filesystem as the bootstrap payload
+          tar -cf procursus-rootless.tar -C extracted .
           ls -la
           tar -tf procursus-rootless.tar | head -n 10
           
-
       - name: generate project
         run: |
           set -euo pipefail
