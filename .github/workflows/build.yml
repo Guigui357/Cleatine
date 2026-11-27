@@ -17,15 +17,14 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 40
     steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
       - name: select xcode
         run: |
           set -euo pipefail
-          # macos-14 carries 15.4 at /Applications/Xcode_15.4.app
-          # if that path is missing, pick from what is installed:
-          ls -d /Applications/Xcode*.app || true
-          sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
           xcodebuild -version
-          uname -m
 
       - name: write project tree
         run: |
