@@ -1,3 +1,4 @@
+# language: YAML, file: project.yml
 name: kfd_a15
 options:
   bundleIdPrefix: com.kfd
@@ -25,6 +26,12 @@ targets:
         excludes:
           - Info.plist
           - kfd_a15.entitlements
+          - Bridge.h
+          - Bridge.m
+      - path: kfd_a15/Bridge.h
+        buildPhase: headers
+      - path: kfd_a15/Bridge.m
+        buildPhase: sources
     settings:
       base:
         INFOPLIST_FILE: kfd_a15/Info.plist
@@ -32,4 +39,7 @@ targets:
         PRODUCT_NAME: kfd_a15
         CODE_SIGN_ENTITLEMENTS: kfd_a15/kfd_a15.entitlements
         TARGETED_DEVICE_FAMILY: "1"
-        SWIFT_OBJC_BRIDGING_HEADER: kfd_a15/Bridge.h
+        SWIFT_OBJC_BRIDGING_HEADER: $(SRCROOT)/kfd_a15/Bridge.h
+        SWIFT_INCLUDE_PATHS:
+          - $(SRCROOT)/kfd_a15
+        PUBLIC_HEADERS_FOLDER_PATH: $(SRCROOT)/kfd_a15
