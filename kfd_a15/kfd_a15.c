@@ -3,7 +3,6 @@
 // found at runtime by structural scan. the only per-build values left are
 // the IOKit trigger selector and the PAC signing gadget.
 #define MACH_VM_PROTOS 1
-#define MACH_VM_DEBUG 1
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,10 +10,40 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
 #include <mach/vm_map.h>
 #include <IOKit/IOKitLib.h>
 #include <CoreFoundation/CoreFoundation.h>
+
+// The iPhoneOS SDK ships mach/mach_vm.h as an #error stub. The MIG
+// stubs are still exported from libSystem, so declare them here with
+// the exact signatures from the xnu header and link against the symbols.
+typedef uint64_t mach_vm_address_t_compat;
+typedef uint64_t mach_vm_size_t_compat;
+typedef uint64_t mach_vm_offset_t_compat;
+
+extern kern_return_t mach_vm_read_overwrite(
+    vm_map_t         target_task,
+    mach_vm_address_t address,
+    mach_vm_size_t   size,
+    mach_vm_address_t data,
+    mach_vm_size_t  *outsize);
+
+extern kern_return_t mach_vm_write(
+    vm_map_t         target_task,
+    mach_vm_address_t address,
+    vm_offset_t      data,
+    mach_msg_type_number_t dataCnt);
+
+extern kern_return_t mach_vm_allocate(
+    vm_map_t         target_task,
+    mach_vm_address_t *address,
+    mach_vm_size_t   size,
+    int              flags);
+
+extern kern_return_t mach_vm_deallocate(
+    vm_map_t         target_task,
+    mach_vm_address_t address,
+    mach_vm_size_t   size);
 
 typedef unsigned long long u64;
 typedef unsigned int       u32;
