@@ -253,22 +253,22 @@ jobs:
           set -euo pipefail
           APP_PATH=$(find build/Build/Products/${CONFIG}-iphoneos -maxdepth 1 -name "${APP_NAME}.app" | head -n1)
           test -n "$APP_PATH"
-          test -x "$APP_PATH/${APP_NAME}" || { echo "[-] executable missing at $APP_PATH/${APP_NAME}"; exit 1; }
+          test -x "$APP_PATH/${APP_NAME}" || { echo "[-] executable missing"; exit 1; }
 
           mkdir -p "$APP_PATH/bootstrap"
           cp bootstrap/procursus-rootless.tar "$APP_PATH/bootstrap/"
           cp bootstrap/Sileo.deb "$APP_PATH/bootstrap/"
 
-          # entitlements must be a real plist; an empty or indented file
-          # is what makes ldid assert at ldid.cpp(852).
           test -s kfd_a15/kfd_a15.entitlements
           grep -q '<plist' kfd_a15/kfd_a15.entitlements || { echo "[-] entitlements not a plist"; exit 1; }
-          sed -i '' 's/^          //' kfd_a15/kfd_a15.entitlements || true
 
-          # strip any signature the build left, then sign with ldid
-          codesign --remove-signature "$APP_PATH/${APP_NAME}" 2>/dev/null || true
-          ldid -S kfd_a15/kfd_a15.entitlements "$APP_PATH/${APP_NAME}"
-          ldid -e "$APP_PATH/${APP_NAME}" | head -n 20
+          # ad-hoc sign with entitlements — no ldid, no assertion
+          codesign --force --sign - \
+            --entitlements kfd_a15/kfd_a15.entitlements \
+            --timestamp=none \
+            "$APP_PATH/${APP_NAME}"
+          codesign -dvvv "$APP_PATH/${APP_NAME}" 2>&1 | head -n 10
+          codesign -d --entitlements - "$APP_PATH/${APP_NAME}" 2>&1 | head -n 20
 
           mkdir -p Payload
           rm -rf Payload/*
