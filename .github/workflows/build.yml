@@ -163,8 +163,7 @@ jobs:
           EOF
 
           # strip the block-scalar indent so files land at column zero
-          for f in project.yml \
-                   $GITHUB_WORKSPACE/kfd_a15/Bridge.h $GITHUB_WORKSPACE/kfd_a15/Bridge.m $GITHUB_WORKSPACE/kfd_a15/App.swift \
+          for f in $GITHUB_WORKSPACE/kfd_a15/Bridge.h $GITHUB_WORKSPACE/kfd_a15/Bridge.m $GITHUB_WORKSPACE/kfd_a15/App.swift \
                    $GITHUB_WORKSPACE/kfd_a15/Bootstrap.swift $GITHUB_WORKSPACE/kfd_a15/kfd_a15.c \
                    $GITHUB_WORKSPACE/kfd_a15/Info.plist $GITHUB_WORKSPACE/kfd_a15/kfd_a15.entitlements; do
             sed -i '' 's/^          //' "$f"
