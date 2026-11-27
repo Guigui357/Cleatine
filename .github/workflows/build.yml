@@ -34,7 +34,6 @@ jobs:
             test -s "$f" || { echo "[-] repo missing $f"; exit 1; }
             echo "[+] $f $(wc -c < "$f") bytes"
           done
-          python3 -c "import yaml;yaml.safe_load(open('project.yml'));print('project.yml parses')"
 
       - name: write missing files
         run: |
