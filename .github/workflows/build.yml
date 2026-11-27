@@ -23,8 +23,11 @@ jobs:
       - name: select xcode
         run: |
           set -euo pipefail
-          sudo xcode-select -s /Applications/Xcode_26.0.1.app/Contents/Developer
+          # Xcode 26.0.1 on macos-26 lacks the iOS platform component.
+          # 26.2 ships the iOS 26.2 SDK and simulator set on the same image.
+          sudo xcode-select -s /Applications/Xcode_26.2.app/Contents/Developer
           xcodebuild -version
+          xcodebuild -showsdks | grep -i iphoneos || true
 
       - name: write project tree
         run: |
